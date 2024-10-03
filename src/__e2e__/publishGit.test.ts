@@ -7,17 +7,18 @@ import { Repository } from '../__fixtures__/repository';
 import { RepositoryFactory } from '../__fixtures__/repositoryFactory';
 import { bumpAndPush } from '../publish/bumpAndPush';
 import { publish } from '../commands/publish';
-import { gatherBumpInfo } from '../bump/gatherBumpInfo';
 import { BeachballOptions } from '../types/BeachballOptions';
 import { ChangeFileInfo } from '../types/ChangeInfo';
-import { getPackageInfos } from '../monorepo/getPackageInfos';
 import { getDefaultOptions } from '../options/getDefaultOptions';
+import { mockProcessExit } from '../__fixtures__/mockProcessExit';
+import { validate } from '../validation/validate';
 
 describe('publish command (git)', () => {
   let repositoryFactory: RepositoryFactory;
   let repo: Repository | undefined;
 
   initMockLogs();
+  mockProcessExit();
 
   function getOptions(overrides?: Partial<BeachballOptions>): BeachballOptions {
     return {
@@ -77,7 +78,7 @@ describe('publish command (git)', () => {
     const publishBranch = 'publish_test';
     repo1.checkout('-b', publishBranch);
 
-    const bumpInfo = gatherBumpInfo(options1, getPackageInfos(repo1.rootPath));
+    const bumpInfo = validate(options1, { checkChangeNeeded: false }).bumpInfo!;
 
     // 3. Meanwhile, in repo2, also create a new change file
     const repo2 = repositoryFactory.cloneRepository();

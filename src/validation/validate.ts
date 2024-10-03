@@ -2,7 +2,6 @@ import { isGitAvailable } from './isGitAvailable';
 import { getUntrackedChanges } from 'workspace-tools';
 import { isValidAuthType } from './isValidAuthType';
 import { isValidChangeType } from './isValidChangeType';
-import { isChangeFileNeeded } from './isChangeFileNeeded';
 import { isValidGroupedPackageOptions, isValidGroupOptions } from './isValidGroupOptions';
 import { BeachballOptions } from '../types/BeachballOptions';
 import { isValidChangelogOptions } from './isValidChangelogOptions';
@@ -12,28 +11,54 @@ import { getPackageGroups } from '../monorepo/getPackageGroups';
 import { getDisallowedChangeTypes } from '../changefile/getDisallowedChangeTypes';
 import { areChangeFilesDeleted } from './areChangeFilesDeleted';
 import { validatePackageDependencies } from '../publish/validatePackageDependencies';
-import { gatherBumpInfo } from '../bump/gatherBumpInfo';
+import { bumpInPlace } from '../bump/bumpInPlace';
 import { isValidDependentChangeType } from './isValidDependentChangeType';
 import { getPackagesToPublish } from '../publish/getPackagesToPublish';
 import { env } from '../env';
+import { BumpInfo } from '../types/BumpInfo';
+import { PackageGroups, PackageInfos } from '../types/PackageInfo';
+import { ChangeSet } from '../types/ChangeInfo';
+import { getScopedPackages } from '../monorepo/getScopedPackages';
+import { getChangedPackages } from '../changefile/getChangedPackages';
 
 type ValidationOptions = {
   /**
-   * Defaults to true. If false, skip fetching the latest from the remote and don't check whether
-   * changes files are needed (or whether change files are deleted).
+   * If true (the default), fetch the latest from the remote and check whether change files are needed
+   * (or whether change files are deleted, if this is disallowed in options).
+   *
+   * If false, don't fetch and don't check if change files are needed.
+   * Setting to false also guarantees that dependency versions will be verified and
+   * `bumpInfo` will be present in the result object.
+   * @default true
    */
-  allowFetching?: boolean;
+  checkChangeNeeded?: boolean;
   /**
-   * If true, skip checking whether change files are needed. Ignored if `allowFetching` is false.
+   * If true, skip checking whether change files are needed. Ignored if `checkChangeNeeded` is false.
    */
   allowMissingChangeFiles?: boolean;
 };
 
+/**
+ * Run validation of options, change files, and packages.
+ * @returns Various info retrieved during validation which is also needed by other functions.
+ */
 export function validate(
   options: BeachballOptions,
   validateOptions?: Partial<ValidationOptions>
-): { isChangeNeeded: boolean } {
-  const { allowMissingChangeFiles = false, allowFetching = true } = validateOptions || {};
+): {
+  isChangeNeeded: boolean;
+  /** Changed package names. This is only set if `options.checkChangeNeeded` is true or unset. */
+  changedPackages: string[] | undefined;
+  /** This is only guaranteed to be set if `options.checkChangeNeeded` is false. */
+  bumpInfo: BumpInfo | undefined;
+  /** Original package infos (not the ones modified by bumping). */
+  packageInfos: PackageInfos;
+  packageGroups: PackageGroups;
+  changeSet: ChangeSet;
+  /** Package names that are in scope per the options */
+  scopedPackages: string[];
+} {
+  const { allowMissingChangeFiles, checkChangeNeeded = true } = validateOptions || {};
 
   console.log('\nValidating options and change files...');
 
@@ -113,7 +138,9 @@ export function validate(
     hasError = true; // the helper logs this
   }
 
-  const changeSet = readChangeFiles(options, packageInfos);
+  const scopedPackages = getScopedPackages(options, packageInfos);
+
+  const changeSet = readChangeFiles(options, packageInfos, scopedPackages);
 
   for (const { changeFile, change } of changeSet) {
     const disallowedChangeTypes = getDisallowedChangeTypes(change.packageName, packageInfos, packageGroups);
@@ -144,10 +171,22 @@ export function validate(
   }
 
   let isChangeNeeded = false;
+  let changedPackages: string[] | undefined;
 
-  if (allowFetching) {
+  if (checkChangeNeeded) {
+    console.log(`Checking for changes against "${options.branch}"`);
+
     // This has the side effect of fetching, so call it even if !allowMissingChangeFiles for now
-    isChangeNeeded = isChangeFileNeeded(options, packageInfos);
+    changedPackages = getChangedPackages(options, packageInfos);
+    if (changedPackages.length > 0) {
+      console.log(
+        `Found changes in the following packages: ${[...changedPackages]
+          .sort()
+          .map(pkg => `\n  ${pkg}`)
+          .join('')}`
+      );
+      isChangeNeeded = true;
+    }
 
     if (isChangeNeeded && !allowMissingChangeFiles) {
       logValidationError('Change files are needed!');
@@ -161,13 +200,17 @@ export function validate(
     }
   }
 
+  let bumpInfo: BumpInfo | undefined;
   if (!isChangeNeeded) {
     console.log('\nValidating package dependencies...');
-    // TODO: It would be preferable if this could be done without getting the full bump info,
-    // or at least if the bump info could be passed back out to other methods which currently
-    // duplicate the calculation (it can be expensive, especially in large repos).
-    const bumpInfo = gatherBumpInfo(options, packageInfos);
+
+    // In theory, we could validate in-repo deps of all packages instead of doing this bump logic,
+    // but there's a risk that this could result in new checks/errors in existing repos
+    // (and might be more perf-intensive in large repos, but it's hard to say).
+    bumpInfo = bumpInPlace({ packageGroups, packageInfos, scopedPackages, changeFileChangeInfos: changeSet }, options);
+
     const packagesToPublish = getPackagesToPublish(bumpInfo, true /*validationMode*/);
+
     if (!validatePackageDependencies(packagesToPublish, bumpInfo.packageInfos)) {
       logValidationError(`One or more published packages depend on an unpublished package!
 
@@ -181,7 +224,5 @@ Consider one of the following solutions:
 
   console.log();
 
-  return {
-    isChangeNeeded,
-  };
+  return { isChangeNeeded, changedPackages, bumpInfo, changeSet, packageGroups, packageInfos, scopedPackages };
 }

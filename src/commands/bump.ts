@@ -1,11 +1,14 @@
-import { gatherBumpInfo } from '../bump/gatherBumpInfo';
 import { performBump } from '../bump/performBump';
-import { getPackageInfos } from '../monorepo/getPackageInfos';
 import { BeachballOptions } from '../types/BeachballOptions';
 import { BumpInfo } from '../types/BumpInfo';
+import { validate } from '../validation/validate';
 
-export async function bump(options: BeachballOptions): Promise<BumpInfo> {
-  const bumpInfo = gatherBumpInfo(options, getPackageInfos(options.path));
-  // The bumpInfo is returned for testing
+/**
+ * Run validation and bump versions
+ * @returns bump info for testing
+ */
+export async function bump(options: BeachballOptions): Promise<BumpInfo | undefined> {
+  const bumpInfo = validate(options, { checkChangeNeeded: false }).bumpInfo!;
+
   return performBump(bumpInfo, options);
 }

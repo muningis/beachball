@@ -30,20 +30,14 @@ import { validate } from './validation/validate';
       break;
 
     case 'publish':
-      validate(options, { allowFetching: false });
-
-      // set a default publish message
-      options.message = options.message || 'applying package updates';
       await publish(options);
       break;
 
     case 'bump':
-      validate(options);
       await bump(options);
       break;
 
     case 'canary':
-      validate(options, { allowFetching: false });
       await canary(options);
       break;
 
@@ -56,15 +50,7 @@ import { validate } from './validation/validate';
       break;
 
     case 'change':
-      const { isChangeNeeded } = validate(options, { allowMissingChangeFiles: true });
-
-      if (!isChangeNeeded && !options.package) {
-        console.log('No change files are needed');
-        return;
-      }
-
       await change(options);
-
       break;
 
     default:
